@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Toaster, toast } from 'react-hot-toast';
-import { 
-  Shield, 
-  Eye, 
-  Zap, 
-  Bell, 
-  Camera, 
-  Users, 
-  X, 
-  MapPin, 
-  Phone, 
+import AgniShaktiChat from './AgniShaktiChat';
+import {
+  Shield,
+  Eye,
+  Zap,
+  Bell,
+  Camera,
+  Users,
+  X,
+  MapPin,
+  Phone,
   Building,
   Lock,
   Mail,
@@ -106,8 +107,8 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
           });
 
           if (!aiResponse.ok) {
-              console.error("[REACT_FRONTEND] AI server request failed.");
-              return;
+            console.error("[REACT_FRONTEND] AI server request failed.");
+            return;
           }
 
           const result = await aiResponse.json();
@@ -119,13 +120,13 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
             // Check if there's an active alert that should block new detections
             // Only block if alert is PENDING, CONFIRMED_BY_GEMINI, SENDING_NOTIFICATIONS, or NOTIFIED_COOLDOWN
             // Don't block if REJECTED_BY_GEMINI or CANCELLED_BY_USER (these are resolved)
-            const shouldBlock = activeAlert && 
-              activeAlert.status !== "REJECTED_BY_GEMINI" && 
+            const shouldBlock = activeAlert &&
+              activeAlert.status !== "REJECTED_BY_GEMINI" &&
               activeAlert.status !== "CANCELLED_BY_USER";
-            
+
             if (shouldBlock) {
               console.log(`[REACT_FRONTEND] (${camera.label}) ⏳ Alert is already active (status: ${activeAlert.status}). Ignoring new detection.`);
-              return; 
+              return;
             }
 
             // --- THIS IS A NEW FIRE! ---
@@ -158,7 +159,7 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
 
     if (isMonitoring) {
       // Run at 2 FPS (every 500ms)
-      analysisInterval = setInterval(runAnalysis, 500); 
+      analysisInterval = setInterval(runAnalysis, 500);
     }
 
     return () => {
@@ -228,16 +229,16 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
           </div>
         ) : (
           <>
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              muted 
-              playsInline 
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
               className="w-full h-full object-cover"
             />
             {/* Hidden canvas for AI frame capture */}
             <canvas ref={canvasRef} style={{ display: 'none' }} />
-            
+
             {/* AI Monitoring Indicator */}
             {isMonitoring && (
               <div className="absolute top-2 left-2 flex items-center gap-2 px-3 py-1 bg-red-600/80 backdrop-blur-md rounded-full">
@@ -277,16 +278,15 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
             </span>
           </div>
         </div>
-        
+
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           onClick={handleToggleMonitoring}
-          className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 ${
-            isMonitoring
-              ? 'bg-red-500 hover:bg-red-600 text-white'
-              : 'bg-green-500 hover:bg-green-600 text-white'
-          }`}
+          className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 ${isMonitoring
+            ? 'bg-red-500 hover:bg-red-600 text-white'
+            : 'bg-green-500 hover:bg-green-600 text-white'
+            }`}
         >
           {isMonitoring ? 'Stop Monitoring' : 'Start Monitoring'}
         </motion.button>
@@ -307,7 +307,7 @@ const OwnerDashboard = ({ email }) => {
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
   const [isVideoPlaying, setIsVideoPlaying] = useState(true);
   const [isVideoMuted, setIsVideoMuted] = useState(true);
-  
+
   // Edit modal state
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [houseToEdit, setHouseToEdit] = useState(null);
@@ -336,16 +336,16 @@ const OwnerDashboard = ({ email }) => {
   const [alertCountdown, setAlertCountdown] = useState(0);
   const alertCountdownInterval = useRef(null);
   const [allActiveAlerts, setAllActiveAlerts] = useState({});
-  
+
   // Refs to access latest values in closures without causing re-renders
   const userRef = useRef(null);
   const activeAlertRef = useRef(null);
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     userRef.current = user;
   }, [user]);
-  
+
   useEffect(() => {
     activeAlertRef.current = activeAlert;
   }, [activeAlert]);
@@ -378,11 +378,11 @@ const OwnerDashboard = ({ email }) => {
     try {
       // Request permission first
       await navigator.mediaDevices.getUserMedia({ video: true });
-      
+
       // Get all devices
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter(device => device.kind === 'videoinput');
-      
+
       setVideoDevices(videoInputs);
       console.log('Video devices loaded:', videoInputs);
     } catch (err) {
@@ -398,7 +398,7 @@ const OwnerDashboard = ({ email }) => {
       if (!camerasResponse.ok) throw new Error('Failed to fetch cameras');
       const camerasData = await camerasResponse.json();
       const camerasArray = camerasData.cameras || [];
-      
+
       // Group cameras by houseId for easier lookup
       const camerasByHouse = camerasArray.reduce((acc, camera) => {
         const { houseId } = camera;
@@ -408,7 +408,7 @@ const OwnerDashboard = ({ email }) => {
         acc[houseId].push(camera);
         return acc;
       }, {});
-      
+
       setCameras(camerasByHouse);
       console.log('Cameras fetched and grouped:', camerasByHouse);
     } catch (err) {
@@ -417,60 +417,60 @@ const OwnerDashboard = ({ email }) => {
     }
   };
 
-useEffect(() => {
+  useEffect(() => {
     // Flag to prevent state updates on unmounted component
     let isMounted = true;
     let pollingInterval = null;
 
     // A single, comprehensive function to fetch all initial data
     const fetchAllData = async () => {
-        try {
-            setLoading(true);
-            setError('');
+      try {
+        setLoading(true);
+        setError('');
 
-            // 1. Fetch User Data
-            const userResponse = await fetch('/api/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email })
-            });
+        // 1. Fetch User Data
+        const userResponse = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
 
-            if (!userResponse.ok) throw new Error('Failed to fetch user data');
-            const userData = await userResponse.json();
-            if (isMounted) setUser(userData.user);
+        if (!userResponse.ok) throw new Error('Failed to fetch user data');
+        const userData = await userResponse.json();
+        if (isMounted) setUser(userData.user);
 
-            // 2. Fetch ALL Houses for the owner
-            const housesArray = await fetchHouses();
+        // 2. Fetch ALL Houses for the owner
+        const housesArray = await fetchHouses();
 
-            // 3. Fetch ALL Cameras for the owner
-            const camerasResponse = await fetch(`/api/cameras?ownerEmail=${email}`);
-            if (!camerasResponse.ok) throw new Error('Failed to fetch cameras');
-            const camerasData = await camerasResponse.json();
-            const camerasArray = camerasData.cameras || [];
-            
-            // Group cameras by houseId for easier lookup
-            const camerasByHouse = camerasArray.reduce((acc, camera) => {
-                const { houseId } = camera;
-                if (!acc[houseId]) {
-                    acc[houseId] = [];
-                }
-                acc[houseId].push(camera);
-                return acc;
-            }, {});
-            if (isMounted) setCameras(camerasByHouse);
+        // 3. Fetch ALL Cameras for the owner
+        const camerasResponse = await fetch(`/api/cameras?ownerEmail=${email}`);
+        if (!camerasResponse.ok) throw new Error('Failed to fetch cameras');
+        const camerasData = await camerasResponse.json();
+        const camerasArray = camerasData.cameras || [];
 
-            // Check if user needs to complete profile
-            if (housesArray.length === 0 && isMounted) {
-                setModalState('add-house-prompt');
-            }
-        } catch (err) {
-            if (isMounted) {
-                console.error("Dashboard initialization failed:", err);
-                setError("Failed to load dashboard data. Please try again.");
-            }
-        } finally {
-            if (isMounted) setLoading(false);
+        // Group cameras by houseId for easier lookup
+        const camerasByHouse = camerasArray.reduce((acc, camera) => {
+          const { houseId } = camera;
+          if (!acc[houseId]) {
+            acc[houseId] = [];
+          }
+          acc[houseId].push(camera);
+          return acc;
+        }, {});
+        if (isMounted) setCameras(camerasByHouse);
+
+        // Check if user needs to complete profile
+        if (housesArray.length === 0 && isMounted) {
+          setModalState('add-house-prompt');
         }
+      } catch (err) {
+        if (isMounted) {
+          console.error("Dashboard initialization failed:", err);
+          setError("Failed to load dashboard data. Please try again.");
+        }
+      } finally {
+        if (isMounted) setLoading(false);
+      }
     };
 
     // Function to poll for alerts
@@ -479,7 +479,7 @@ useEffect(() => {
       const currentUser = userRef.current;
       const currentActiveAlert = activeAlertRef.current;
       const currentUserEmail = currentUser?.email || email;
-      
+
       if (!currentUserEmail) return;
 
       try {
@@ -532,8 +532,8 @@ useEffect(() => {
         } else {
           // We are NOT showing a modal. Check if we *should* show one.
           // Use ref to check if we already have an active alert to prevent duplicates
-          const newPendingAlert = currentAlerts.find(a => 
-            (a.status === 'PENDING' || a.status === 'CONFIRMED_BY_GEMINI') && 
+          const newPendingAlert = currentAlerts.find(a =>
+            (a.status === 'PENDING' || a.status === 'CONFIRMED_BY_GEMINI') &&
             (!currentActiveAlert || currentActiveAlert.alertId !== a.alertId)
           );
 
@@ -576,51 +576,60 @@ useEffect(() => {
         console.error('Error polling alerts:', err);
       }
     };
-    
+
     // Initial data fetch and start polling
     fetchAllData();
     pollingInterval = setInterval(pollAlerts, 5000);
 
     // Cleanup function
     return () => {
-        isMounted = false;
-        clearInterval(pollingInterval);
-        if (alertCountdownInterval.current) {
-            clearInterval(alertCountdownInterval.current);
-        }
+      isMounted = false;
+      clearInterval(pollingInterval);
+      if (alertCountdownInterval.current) {
+        clearInterval(alertCountdownInterval.current);
+      }
     };
-}, [email]); // Only depend on email - user and activeAlert are accessed via closure in pollAlerts
+  }, [email]); // Only depend on email - user and activeAlert are accessed via closure in pollAlerts
 
-const startAlertCountdown = (alertData) => {
+  const startAlertCountdown = (alertData) => {
     if (activeAlert) return; // Prevents multiple alerts from being active at once
-    
+
     setActiveAlert(alertData);
     setAlertCountdown(30);
 
     if (alertCountdownInterval.current) clearInterval(alertCountdownInterval.current);
-    
-    alertCountdownInterval.current = setInterval(async () => {
-        setAlertCountdown(prev => {
-            if (prev <= 1) {
-                // The timer expired, the alert is considered confirmed.
-                clearInterval(alertCountdownInterval.current);
-                setActiveAlert(null);
-                // Call the "Email Gatekeeper"
-                fetch('/api/alerts/confirm-and-send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ alertId: alertData.alertId })
-                }).catch(err => console.error('[REACT_FRONTEND] Error confirming alert:', err));
-                toast.success('Emergency services have been notified!');
-                return 0;
-            }
-            return prev - 1;
-        });
+
+    // Store alertData in a ref so we can access it when countdown expires
+    const alertDataForExpiry = alertData;
+
+    alertCountdownInterval.current = setInterval(() => {
+      setAlertCountdown(prev => {
+        if (prev <= 1) {
+          // Clear the interval first
+          clearInterval(alertCountdownInterval.current);
+
+          // Use setTimeout to move side effects out of the setState callback
+          // This prevents the "Cannot update a component while rendering" error
+          setTimeout(() => {
+            setActiveAlert(null);
+            // Call the "Email Gatekeeper"
+            fetch('/api/alerts/confirm-and-send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ alertId: alertDataForExpiry.alertId })
+            }).catch(err => console.error('[REACT_FRONTEND] Error confirming alert:', err));
+            toast.success('Emergency services have been notified!');
+          }, 0);
+
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
-};
+  };
   // Cancel active alert
   const handleCancelAlert = async () => {
-    if (!activeAlert) return; 
+    if (!activeAlert) return;
 
     const alertIdToCancel = activeAlert.alertId;
     const userEmail = user?.email || email || "unknown.user@example.com";
@@ -650,7 +659,7 @@ const startAlertCountdown = (alertData) => {
       await fetch('/api/alerts/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           alertId: alertIdToCancel,
           userEmail: userEmail
         })
@@ -676,9 +685,9 @@ const startAlertCountdown = (alertData) => {
         body: JSON.stringify({
           ownerEmail: email,
           address: houseForm.address,
-          coords: { 
-            lat: parseFloat(houseForm.latitude), 
-            lng: parseFloat(houseForm.longitude) 
+          coords: {
+            lat: parseFloat(houseForm.latitude),
+            lng: parseFloat(houseForm.longitude)
           },
           monitorPassword: houseForm.monitorPassword
         })
@@ -687,10 +696,10 @@ const startAlertCountdown = (alertData) => {
       if (response.ok) {
         const newHouseData = await response.json();
         console.log('House created successfully:', newHouseData);
-        
+
         // Re-fetch all houses to get the complete list from the database
         await fetchHouses();
-        
+
         setModalState(null);
         setHouseForm({ address: '', latitude: '', longitude: '', monitorPassword: '' });
         showToast('House added successfully!');
@@ -722,10 +731,10 @@ const startAlertCountdown = (alertData) => {
 
       if (response.ok) {
         console.log('House deleted successfully:', houseId);
-        
+
         // Re-fetch all houses to update the list
         await fetchHouses();
-        
+
         showToast('Property deleted successfully!');
       } else {
         throw new Error('Failed to delete property');
@@ -743,7 +752,7 @@ const startAlertCountdown = (alertData) => {
     if (e) {
       e.stopPropagation();
     }
-    
+
     setHouseToEdit(house);
     setIsEditModalOpen(true);
   };
@@ -757,7 +766,7 @@ const startAlertCountdown = (alertData) => {
   // Update house
   const handleUpdateHouse = async (event) => {
     event.preventDefault();
-    
+
     if (!houseToEdit) return;
 
     try {
@@ -771,13 +780,13 @@ const startAlertCountdown = (alertData) => {
 
       if (response.ok) {
         console.log('House updated successfully:', houseToEdit.houseId);
-        
+
         // Re-fetch all houses to update the list
         await fetchHouses();
-        
+
         // Close modal
         handleCloseEditModal();
-        
+
         showToast('Property updated successfully!');
       } else {
         throw new Error('Failed to update property');
@@ -790,49 +799,49 @@ const startAlertCountdown = (alertData) => {
   };
 
   // Add new camera
-const handleAddCamera = async (e) => {
-  e.preventDefault();
-  if (!selectedHouse) return;
+  const handleAddCamera = async (e) => {
+    e.preventDefault();
+    if (!selectedHouse) return;
 
-  try {
-    // Get values from form
-    const formData = new FormData(e.target);
-    const cameraName = formData.get('cameraName');
-    const deviceId = formData.get('deviceId');
+    try {
+      // Get values from form
+      const formData = new FormData(e.target);
+      const cameraName = formData.get('cameraName');
+      const deviceId = formData.get('deviceId');
 
-    if (!deviceId) {
-      showToast('Please select a camera device');
-      return;
+      if (!deviceId) {
+        showToast('Please select a camera device');
+        return;
+      }
+
+      const response = await fetch('/api/cameras', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          houseId: selectedHouse.houseId,
+          label: cameraName,
+          source: deviceId,
+          streamType: 'webcam'
+        })
+      });
+
+      if (response.ok) {
+        const newCameraData = await response.json();
+        showToast('Camera added successfully!');
+        setModalState(null);
+        setCameraForm({ cameraName: '', streamUrl: '' });
+
+        // Re-fetch cameras to get the updated list
+        await fetchCameras();
+      } else {
+        throw new Error('Failed to add camera');
+      }
+    } catch (err) {
+      console.error('Error adding camera:', err);
+      setError(err.message);
+      showToast('Failed to add camera. Please try again.');
     }
-
-    const response = await fetch('/api/cameras', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        houseId: selectedHouse.houseId,
-        label: cameraName,
-        source: deviceId,
-        streamType: 'webcam'
-      })
-    });
-
-    if (response.ok) {
-      const newCameraData = await response.json();
-      showToast('Camera added successfully!');
-      setModalState(null);
-      setCameraForm({ cameraName: '', streamUrl: '' });
-      
-      // Re-fetch cameras to get the updated list
-      await fetchCameras();
-    } else {
-      throw new Error('Failed to add camera');
-    }
-  } catch (err) {
-    console.error('Error adding camera:', err);
-    setError(err.message);
-    showToast('Failed to add camera. Please try again.');
-  }
-};
+  };
 
   // Demo: Use webcam - assign to first available camera for demo purposes
   const startWebcamDemo = () => {
@@ -842,7 +851,7 @@ const handleAddCamera = async (e) => {
       showToast('Please add a camera first to enable demo mode!');
       return;
     }
-    
+
     const demoCamera = allCamerasList[0];
     console.log(`[DEMO] Using camera ${demoCamera.cameraId} (${demoCamera.label}) for webcam demo`);
     setDemoStream(`http://localhost:8000/webcam_feed/${demoCamera.cameraId}`);
@@ -900,7 +909,7 @@ const handleAddCamera = async (e) => {
     toast.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 opacity-0 transition-opacity duration-300';
     toast.textContent = message;
     document.body.appendChild(toast);
-    
+
     setTimeout(() => toast.style.opacity = '1', 100);
     setTimeout(() => {
       toast.style.opacity = '0';
@@ -968,16 +977,16 @@ const handleAddCamera = async (e) => {
               >
                 <AlertTriangle className="w-12 h-12 text-white" />
               </motion.div>
-              
+
               <h2 className="text-3xl font-bold text-white mb-4">FIRE DETECTED!</h2>
               <p className="text-red-200 mb-6">
                 Fire detected at {activeAlert.location || 'your property'}
               </p>
-              
+
               <div className="text-7xl font-bold text-red-500 mb-4">
                 {alertCountdown}
               </div>
-              
+
               <div className="space-y-4">
                 <button
                   onClick={handleCancelAlert}
@@ -1015,18 +1024,20 @@ const handleAddCamera = async (e) => {
 
             <div className="flex items-center gap-4">
               {/* Alerts indicator */}
-              {alerts.length > 0 && (
-                <motion.div
-                  animate={{ scale: [1, 1.1, 1] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                  className="relative"
-                >
-                  <Bell className="w-6 h-6 text-orange-400" />
-                  <div className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-xs text-white">
+              <motion.button
+                animate={alerts.length > 0 ? { scale: [1, 1.1, 1] } : {}}
+                transition={{ duration: 2, repeat: Infinity }}
+                onClick={() => setModalState('alerts')}
+                className="relative p-2 hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+                title="View Alerts"
+              >
+                <Bell className="w-6 h-6 text-orange-400" />
+                {alerts.length > 0 && (
+                  <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-xs text-white">
                     {alerts.length}
                   </div>
-                </motion.div>
-              )}
+                )}
+              </motion.button>
 
               {/* Profile menu */}
               <motion.button
@@ -1102,7 +1113,7 @@ const handleAddCamera = async (e) => {
                         >
                           <FilePenLine className="w-4 h-4" />
                         </motion.button>
-                        
+
                         {/* Delete button */}
                         <motion.button
                           whileHover={{ scale: 1.1 }}
@@ -1128,10 +1139,10 @@ const handleAddCamera = async (e) => {
                           </div>
                         </div>
                       </div>
-                      
+
                       <h3 className="text-xl font-bold text-white mb-2">Property</h3>
                       <p className="text-gray-400 text-sm mb-4 line-clamp-2">{house.address}</p>
-                      
+
                       <div className="flex items-center gap-2">
                         <MapPin className="w-4 h-4 text-orange-400" />
                         <span className="text-sm text-gray-300">
@@ -1154,7 +1165,7 @@ const handleAddCamera = async (e) => {
                   {/* Demo Controls */}
                   <div className="p-6 bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl">
                     <h3 className="text-xl font-bold text-white mb-6">Demo Controls</h3>
-                    
+
                     <div className="space-y-4 mb-6">
                       <motion.button
                         whileHover={{ scale: 1.02 }}
@@ -1188,12 +1199,12 @@ const handleAddCamera = async (e) => {
                   {/* Demo Stream */}
                   <div className="p-6 bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl">
                     <h3 className="text-xl font-bold text-white mb-6">Live AI Detection</h3>
-                    
+
                     <div className="aspect-video bg-black/50 rounded-xl flex items-center justify-center border border-white/10 overflow-hidden">
                       {demoStream ? (
-                        <img 
-                          src={demoStream} 
-                          alt="Live AI Detection" 
+                        <img
+                          src={demoStream}
+                          alt="Live AI Detection"
                           className="w-full h-full object-cover rounded-xl"
                         />
                       ) : (
@@ -1224,7 +1235,7 @@ const handleAddCamera = async (e) => {
                     <p className="text-gray-400">{selectedHouse.address}</p>
                   </div>
                 </div>
-                
+
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   onClick={() => {
@@ -1300,6 +1311,7 @@ const handleAddCamera = async (e) => {
                   {modalState === 'add-house-prompt' && 'Complete Your Profile'}
                   {modalState === 'add-camera' && 'Add New Camera'}
                   {modalState === 'profile' && 'Your Profile'}
+                  {modalState === 'alerts' && 'Alert History'}
                 </h2>
                 <motion.button
                   whileHover={{ scale: 1.1 }}
@@ -1438,8 +1450,8 @@ const handleAddCamera = async (e) => {
                       >
                         <option value="" className="bg-gray-800">Select a camera</option>
                         {videoDevices.map(device => (
-                          <option 
-                            key={device.deviceId} 
+                          <option
+                            key={device.deviceId}
                             value={device.deviceId}
                             className="bg-gray-800"
                           >
@@ -1525,6 +1537,78 @@ const handleAddCamera = async (e) => {
                       <LogOut className="w-5 h-5" />
                       Sign Out
                     </motion.button>
+                  </div>
+                )}
+
+                {modalState === 'alerts' && (
+                  <div className="space-y-6">
+                    <div className="text-center mb-6">
+                      <div className="w-16 h-16 bg-gradient-to-r from-orange-400 to-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <Bell className="w-8 h-8 text-white" />
+                      </div>
+                      <h3 className="text-2xl font-bold text-white">Alert History</h3>
+                      <p className="text-gray-400">{alerts.length} total alerts</p>
+                    </div>
+
+                    {alerts.length === 0 ? (
+                      <div className="text-center py-8">
+                        <div className="w-16 h-16 bg-gray-700/50 rounded-full flex items-center justify-center mx-auto mb-4">
+                          <Bell className="w-8 h-8 text-gray-500" />
+                        </div>
+                        <p className="text-gray-400">No alerts yet</p>
+                        <p className="text-gray-500 text-sm mt-2">Fire detections will appear here</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
+                        {alerts.map((alert, index) => (
+                          <motion.div
+                            key={alert.alertId || index}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: index * 0.05 }}
+                            className={`p-4 rounded-xl border ${alert.status === 'PENDING' || alert.status === 'CONFIRMED_BY_GEMINI'
+                              ? 'bg-red-500/10 border-red-500/30'
+                              : alert.status === 'REJECTED_BY_GEMINI' || alert.status === 'CANCELLED_BY_USER'
+                                ? 'bg-gray-500/10 border-gray-500/30'
+                                : 'bg-orange-500/10 border-orange-500/30'
+                              }`}
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-3 h-3 rounded-full ${alert.status === 'PENDING' ? 'bg-yellow-400 animate-pulse' :
+                                  alert.status === 'CONFIRMED_BY_GEMINI' ? 'bg-red-500 animate-pulse' :
+                                    alert.status === 'REJECTED_BY_GEMINI' ? 'bg-gray-500' :
+                                      alert.status === 'CANCELLED_BY_USER' ? 'bg-gray-500' :
+                                        alert.status === 'NOTIFIED_COOLDOWN' ? 'bg-green-500' :
+                                          'bg-orange-400'
+                                  }`} />
+                                <div>
+                                  <p className="text-white font-medium">
+                                    {alert.status === 'PENDING' && 'Verifying...'}
+                                    {alert.status === 'CONFIRMED_BY_GEMINI' && '🔥 Fire Confirmed'}
+                                    {alert.status === 'REJECTED_BY_GEMINI' && '❌ False Alarm'}
+                                    {alert.status === 'CANCELLED_BY_USER' && '🚫 Cancelled'}
+                                    {alert.status === 'NOTIFIED_COOLDOWN' && '✅ Notified'}
+                                    {alert.status === 'SENDING_NOTIFICATIONS' && '📤 Sending...'}
+                                  </p>
+                                  <p className="text-gray-400 text-sm">
+                                    {alert.detection?.class || 'Fire'} - {Math.round((alert.detection?.confidence || 0) * 100)}% confidence
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="text-gray-500 text-xs">
+                                {alert.timestamp ? new Date(alert.timestamp).toLocaleTimeString() : 'N/A'}
+                              </span>
+                            </div>
+                            {alert.geminiCheck?.reason && (
+                              <p className="text-gray-400 text-sm mt-2 pl-6">
+                                Reason: {alert.geminiCheck.reason}
+                              </p>
+                            )}
+                          </motion.div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1653,6 +1737,9 @@ const handleAddCamera = async (e) => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* AgniShakti AI Assistant Chat */}
+      <AgniShaktiChat />
     </div>
   );
 };
