@@ -1,0 +1,66 @@
+{
+  "testedAt": "2026-01-17T08:08:22.033Z",
+  "apiKeyPrefix": "AIzaSyDLkP",
+  "working": [
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash"
+  ],
+  "rateLimited": [
+    "gemini-3-pro-preview",
+    "gemini-3-pro-image-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-pro-preview-tts",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-2.0-flash-lite",
+    "gemini-exp-1206"
+  ],
+  "notFound": [
+    "gemini-2.5-pro-preview",
+    "gemini-2.5-flash-preview",
+    "gemini-2.5-flash-lite-preview",
+    "gemini-2.5-flash-lite-preview-06-17",
+    "gemini-2.5-flash-native-audio-preview-12-2025",
+    "gemini-2.0-flash-thinking-exp",
+    "gemini-2.0-flash-thinking-exp-01-21",
+    "gemini-2.0-pro-exp",
+    "gemini-2.0-pro",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-pro-001",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-flash-8b-001",
+    "gemini-1.5-flash-8b-latest",
+    "gemini-exp-1121",
+    "gemini-exp-1114",
+    "learnlm-1.5-pro-experimental",
+    "gemini-pro-vision",
+    "gemini-1.5-pro-vision",
+    "gemini-pro",
+    "gemini-ultra"
+  ],
+  "errors": [
+    {
+      "model": "gemini-2.5-flash-preview-tts",
+      "status": "ERROR",
+      "code": 400
+    }
+  ],
+  "recommendedArray": [
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-3-pro-preview",
+    "gemini-3-pro-image-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-pro-preview-tts",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-2.0-flash-lite",
+    "gemini-exp-1206"
+  ]
+}
