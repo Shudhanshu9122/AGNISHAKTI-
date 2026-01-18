@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Toaster, toast } from 'react-hot-toast';
 import AgniShaktiChat from './AgniShaktiChat';
+import LocationPicker from './LocationPicker';
+import { useAuth } from '@/context/AuthContext';
+import { useRouter } from 'next/navigation';
 import {
   Shield,
   Eye,
@@ -99,6 +102,7 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
         // 2. Send blob to NEW Python endpoint
         const formData = new FormData();
         formData.append('file', blob, 'frame.jpg');
+        formData.append('camera_id', camera.cameraId); // Send camera ID for cooldown image updates
 
         try {
           const aiResponse = await fetch('http://localhost:8000/analyze_and_save_frame', {
@@ -295,6 +299,34 @@ const CameraFeed = ({ camera, onCameraDeleted, onToggleMonitoring, activeAlert }
   );
 };
 
+// SignOutButton component - properly signs out user using AuthContext
+const SignOutButton = () => {
+  const { signOutUser } = useAuth();
+  const router = useRouter();
+
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+      console.log('[OWNER_DASHBOARD] User signed out successfully');
+      router.push('/');
+    } catch (error) {
+      console.error('[OWNER_DASHBOARD] Sign out error:', error);
+      toast.error('Failed to sign out. Please try again.');
+    }
+  };
+
+  return (
+    <motion.button
+      whileHover={{ scale: 1.02 }}
+      onClick={handleSignOut}
+      className="w-full px-6 py-4 bg-gradient-to-r from-gray-600 to-gray-700 text-white rounded-xl font-semibold hover:from-gray-700 hover:to-gray-800 transition-all duration-300 flex items-center justify-center gap-2"
+    >
+      <LogOut className="w-5 h-5" />
+      Sign Out
+    </motion.button>
+  );
+};
+
 const OwnerDashboard = ({ email }) => {
   // User and profile state
   const [user, setUser] = useState(null);
@@ -326,6 +358,8 @@ const OwnerDashboard = ({ email }) => {
     longitude: '',
     monitorPassword: ''
   });
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState(null);
   const [cameraForm, setCameraForm] = useState({
     cameraName: '',
     streamUrl: ''
@@ -531,11 +565,22 @@ const OwnerDashboard = ({ email }) => {
 
         } else {
           // We are NOT showing a modal. Check if we *should* show one.
-          // Use ref to check if we already have an active alert to prevent duplicates
-          const newPendingAlert = currentAlerts.find(a =>
-            (a.status === 'PENDING' || a.status === 'CONFIRMED_BY_GEMINI') &&
-            (!currentActiveAlert || currentActiveAlert.alertId !== a.alertId)
-          );
+          // Only show alerts that are recent (created within last 5 minutes)
+          const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+
+          const newPendingAlert = currentAlerts.find(a => {
+            // Check if alert is recent
+            const alertCreatedAt = a.createdAt?.toDate ? a.createdAt.toDate().getTime() :
+              a.createdAt?._seconds ? a.createdAt._seconds * 1000 :
+                new Date(a.createdAt).getTime();
+
+            const isRecent = alertCreatedAt > fiveMinutesAgo;
+
+            // Only show if: status is PENDING or CONFIRMED, is recent, and not already showing
+            return (a.status === 'PENDING' || a.status === 'CONFIRMED_BY_GEMINI') &&
+              isRecent &&
+              (!currentActiveAlert || currentActiveAlert.alertId !== a.alertId);
+          });
 
           if (newPendingAlert) {
             // A new alert just appeared! Start the countdown.
@@ -675,9 +720,34 @@ const OwnerDashboard = ({ email }) => {
     }
   };
 
+  // Handle location selection from LocationPicker
+  const handleLocationSelect = (locationData) => {
+    setSelectedLocation({
+      lat: locationData.latitude,
+      lng: locationData.longitude
+    });
+    setShowLocationPicker(false);
+
+    // Update form with coordinates
+    setHouseForm({
+      ...houseForm,
+      latitude: locationData.latitude.toString(),
+      longitude: locationData.longitude.toString()
+    });
+
+    toast.success('Location selected successfully!');
+  };
+
   // Add new house
   const handleAddHouse = async (e) => {
     e.preventDefault();
+
+    // Validate location is selected
+    if (!selectedLocation) {
+      toast.error('Please select a location on the map');
+      return;
+    }
+
     try {
       const response = await fetch('/api/houses', {
         method: 'POST',
@@ -686,8 +756,8 @@ const OwnerDashboard = ({ email }) => {
           ownerEmail: email,
           address: houseForm.address,
           coords: {
-            lat: parseFloat(houseForm.latitude),
-            lng: parseFloat(houseForm.longitude)
+            lat: selectedLocation.lat,
+            lng: selectedLocation.lng
           },
           monitorPassword: houseForm.monitorPassword
         })
@@ -702,6 +772,7 @@ const OwnerDashboard = ({ email }) => {
 
         setModalState(null);
         setHouseForm({ address: '', latitude: '', longitude: '', monitorPassword: '' });
+        setSelectedLocation(null);
         showToast('House added successfully!');
       } else {
         throw new Error('Failed to add house');
@@ -1206,6 +1277,14 @@ const OwnerDashboard = ({ email }) => {
                           src={demoStream}
                           alt="Live AI Detection"
                           className="w-full h-full object-cover rounded-xl"
+                          onError={(e) => {
+                            console.error('[DEMO] Stream failed to load:', demoStream);
+                            showToast('Failed to load video stream. Please try again.');
+                            setDemoStream(null);
+                          }}
+                          onLoad={() => {
+                            console.log('[DEMO] Stream loaded successfully:', demoStream);
+                          }}
                         />
                       ) : (
                         <div className="text-center">
@@ -1360,35 +1439,52 @@ const OwnerDashboard = ({ email }) => {
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                          Latitude
-                        </label>
-                        <input
-                          type="number"
-                          step="any"
-                          value={houseForm.latitude}
-                          onChange={(e) => setHouseForm({ ...houseForm, latitude: e.target.value })}
-                          required
-                          className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all duration-300"
-                          placeholder="40.7128"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">
-                          Longitude
-                        </label>
-                        <input
-                          type="number"
-                          step="any"
-                          value={houseForm.longitude}
-                          onChange={(e) => setHouseForm({ ...houseForm, longitude: e.target.value })}
-                          required
-                          className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all duration-300"
-                          placeholder="-74.0060"
-                        />
-                      </div>
+
+                    <div className="space-y-3">
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Property Location
+                      </label>
+
+                      {selectedLocation ? (
+                        <div className="p-4 bg-green-900/20 border border-green-500/30 rounded-xl">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-5 h-5 text-green-400" />
+                              <span className="text-green-400 font-semibold">✅ Location Selected</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowLocationPicker(true)}
+                              className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 text-sm transition-all"
+                            >
+                              Change
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 text-sm">
+                            <div>
+                              <p className="text-gray-400">Latitude</p>
+                              <p className="text-white font-mono">{selectedLocation.lat.toFixed(6)}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-400">Longitude</p>
+                              <p className="text-white font-mono">{selectedLocation.lng.toFixed(6)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setShowLocationPicker(true)}
+                          className="w-full px-6 py-4 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-semibold hover:from-orange-600 hover:to-red-700 transition-all duration-300 flex items-center justify-center gap-2 shadow-lg"
+                        >
+                          <MapPin className="w-5 h-5" />
+                          Select Location on Map
+                        </button>
+                      )}
+
+                      <p className="text-gray-400 text-xs">
+                        📍 GPS will auto-detect your location, or you can select manually on the map
+                      </p>
                     </div>
 
                     <div>
@@ -1526,17 +1622,7 @@ const OwnerDashboard = ({ email }) => {
                       </div>
                     </div>
 
-                    <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      onClick={() => {
-                        // Sign out logic would go here
-                        window.location.href = '/';
-                      }}
-                      className="w-full px-6 py-4 bg-gradient-to-r from-gray-600 to-gray-700 text-white rounded-xl font-semibold hover:from-gray-700 hover:to-gray-800 transition-all duration-300 flex items-center justify-center gap-2"
-                    >
-                      <LogOut className="w-5 h-5" />
-                      Sign Out
-                    </motion.button>
+                    <SignOutButton />
                   </div>
                 )}
 
@@ -1740,6 +1826,15 @@ const OwnerDashboard = ({ email }) => {
 
       {/* AgniShakti AI Assistant Chat */}
       <AgniShaktiChat />
+
+      {/* Location Picker Modal */}
+      {showLocationPicker && (
+        <LocationPicker
+          onLocationSelect={handleLocationSelect}
+          onClose={() => setShowLocationPicker(false)}
+          initialLocation={selectedLocation}
+        />
+      )}
     </div>
   );
 };

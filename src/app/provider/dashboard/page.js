@@ -27,18 +27,18 @@
 //   const fetchUserAndDashboardData = async () => {
 //     try {
 //       setLoadingData(true);
-      
+
 //       // Fetch user details
 //       const userResponse = await fetch('/api/auth/login', {
 //         method: 'POST',
 //         headers: { 'Content-Type': 'application/json' },
 //         body: JSON.stringify({ email: currentUser.email })
 //       });
-      
+
 //       if (userResponse.ok) {
 //         const userData = await userResponse.json();
 //         setUser(userData.user);
-        
+
 //         // Fetch provider dashboard data
 //         const dashboardResponse = await fetch(`/api/provider/dashboard?providerEmail=${currentUser.email}`);
 //         if (dashboardResponse.ok) {
@@ -132,10 +132,10 @@
 //                     </div>
 //                   )}
 //                 </div>
-                
+
 //                 <h3 className="text-xl font-bold text-white mb-2">Property</h3>
 //                 <p className="text-gray-400 text-sm mb-4 line-clamp-2">{house.address}</p>
-                
+
 //                 <div className="space-y-2 mb-4">
 //                   <div className="flex items-center gap-2">
 //                     <MapPin className="w-4 h-4 text-orange-400" />
@@ -178,11 +178,12 @@ import {
   Shield, AlertTriangle, MapPin, Phone, Building, Mail, User,
   Navigation, ChevronDown, ChevronUp, Clock, Zap,
   Flame, Eye, RefreshCw, ExternalLink, Home, Calendar,
-  Activity, CheckCircle, Bell, XCircle, Loader, Camera
+  Activity, CheckCircle, Bell, XCircle, Loader, Camera, LogOut
 } from 'lucide-react';
+import ResponderLocationTracker from '@/components/ResponderLocationTracker';
 
 // Constants
-const VIDEO_URL = "https://sample-videos.com/zip/10/mp4/480/SampleVideo_1280x720_1mb.mp4";
+const VIDEO_URL = "/uploads/dashboard_bg.mp4";
 const POLL_INTERVAL = 5000; // 5 seconds
 const IMAGE_UPDATE_INTERVAL = 30000; // 30 seconds
 
@@ -211,11 +212,17 @@ const STATUS_CONFIGS = {
     color: 'bg-orange-500/20 border-orange-500/30 text-orange-300',
     icon: AlertTriangle,
     pulse: false
+  },
+  DISPATCHED: {
+    label: 'Dispatched',
+    color: 'bg-red-500/20 border-red-500/30 text-red-300',
+    icon: Flame,
+    pulse: true
   }
 };
 
 const ProviderDashboard = () => {
-  const { currentUser, loading: authLoading } = useAuth();
+  const { currentUser, loading: authLoading, signOutUser } = useAuth();
   const router = useRouter();
 
   // State Management
@@ -231,7 +238,7 @@ const ProviderDashboard = () => {
   // Convert Python service URL to Next.js API proxy URL
   const getPublicImageUrl = (imageUrl) => {
     if (!imageUrl) return null;
-    
+
     // If it's already a Next.js API URL, return as-is
     if (imageUrl.includes('/api/snapshots/')) {
       // If it's already a full URL, return as-is
@@ -241,7 +248,7 @@ const ProviderDashboard = () => {
       // If it's relative, return as-is (browser will resolve it)
       return imageUrl;
     }
-    
+
     // Extract imageId from Python service URL (e.g., http://127.0.0.1:8000/snapshots/uuid.jpg)
     let imageId = null;
     if (imageUrl.includes('/snapshots/')) {
@@ -255,9 +262,9 @@ const ProviderDashboard = () => {
       // If it's just an imageId/filename, use it directly
       imageId = imageUrl;
     }
-    
+
     if (!imageId) return imageUrl; // Fallback to original URL
-    
+
     // Construct Next.js API proxy URL (relative URL works fine in browser)
     return `/api/snapshots/${imageId}`;
   };
@@ -281,7 +288,7 @@ const ProviderDashboard = () => {
   // Timestamp Utilities
   const getTimestamp = (timestamp) => {
     if (!timestamp) return null;
-    
+
     try {
       if (timestamp.toDate) {
         const date = timestamp.toDate();
@@ -302,7 +309,7 @@ const ProviderDashboard = () => {
       console.error('Error parsing timestamp:', err, timestamp);
       return null;
     }
-    
+
     return null;
   };
 
@@ -310,7 +317,7 @@ const ProviderDashboard = () => {
     try {
       const date = getTimestamp(timestamp);
       if (!date || isNaN(date.getTime())) return 'N/A';
-      
+
       return new Intl.DateTimeFormat('en-US', {
         month: 'short',
         day: 'numeric',
@@ -329,9 +336,9 @@ const ProviderDashboard = () => {
     try {
       const date = getTimestamp(timestamp);
       if (!date || isNaN(date.getTime())) return 'Unknown';
-      
+
       const seconds = Math.floor((new Date() - date) / 1000);
-      
+
       if (seconds < 0) return 'Just now'; // Handle future dates
       if (seconds < 60) return `${seconds}s ago`;
       if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
@@ -349,17 +356,17 @@ const ProviderDashboard = () => {
 
     try {
       const response = await fetch(`/api/provider/dashboard?providerEmail=${encodeURIComponent(currentUser.email)}`);
-      
+
       if (!response.ok) {
         throw new Error(`Failed to fetch dashboard: ${response.status}`);
       }
 
       const data = await response.json();
-      
+
       if (data.success && data.dashboard) {
         setDashboardData(data.dashboard);
         setLastUpdateTime(new Date());
-        
+
         if (showToast) {
           toast.success('Dashboard updated', {
             duration: 2000,
@@ -415,7 +422,7 @@ const ProviderDashboard = () => {
 
     try {
       const response = await fetch(`/api/houses/${houseId}`);
-      
+
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.house) {
@@ -483,9 +490,9 @@ const ProviderDashboard = () => {
 
       if (response.ok && data.success) {
         toast.success('Alert marked as responded');
-        
+
         // Remove the alert from local state immediately (optimistic update)
-        setDashboardData(prev => 
+        setDashboardData(prev =>
           prev.map(house => ({
             ...house,
             activeAlerts: (house.activeAlerts || []).filter(alert => alert.alertId !== alertId)
@@ -563,8 +570,8 @@ const ProviderDashboard = () => {
   // Flatten alerts from all houses
   const getAllAlerts = () => {
     const alerts = [];
-    const activeStatuses = ['CONFIRMED_BY_GEMINI', 'SENDING_NOTIFICATIONS', 'NOTIFIED_COOLDOWN'];
-    
+    const activeStatuses = ['CONFIRMED_BY_GEMINI', 'SENDING_NOTIFICATIONS', 'NOTIFIED_COOLDOWN', 'DISPATCHED'];
+
     dashboardData.forEach(house => {
       if (house.activeAlerts && house.activeAlerts.length > 0) {
         house.activeAlerts.forEach(alert => {
@@ -578,7 +585,7 @@ const ProviderDashboard = () => {
         });
       }
     });
-    
+
     // Sort by most recent first
     return alerts.sort((a, b) => {
       try {
@@ -614,7 +621,7 @@ const ProviderDashboard = () => {
   return (
     <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-900 to-slate-800">
       <Toaster position="top-right" />
-      
+
       {/* Background Video */}
       <div className="fixed inset-0 z-0">
         <video
@@ -672,11 +679,31 @@ const ProviderDashboard = () => {
                 >
                   <RefreshCw className="w-5 h-5 text-white" />
                 </motion.button>
+
+                {/* Sign Out Button */}
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={async () => {
+                    try {
+                      await signOutUser();
+                      console.log('[PROVIDER_DASHBOARD] User signed out');
+                      router.push('/');
+                    } catch (error) {
+                      console.error('[PROVIDER_DASHBOARD] Sign out error:', error);
+                      toast.error('Failed to sign out');
+                    }
+                  }}
+                  className="p-3 bg-red-500/20 backdrop-blur-xl border border-red-500/30 rounded-xl hover:bg-red-500/30 transition-all duration-300"
+                  title="Sign Out"
+                >
+                  <LogOut className="w-5 h-5 text-red-400" />
+                </motion.button>
               </div>
             </div>
 
             {/* Status Bar */}
-            <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between text-sm mb-4">
               <div className="flex items-center gap-2 text-gray-400">
                 <Clock className="w-4 h-4" />
                 <span>Last updated: {formatTimeAgo(lastUpdateTime)}</span>
@@ -685,6 +712,19 @@ const ProviderDashboard = () => {
                 <div className={`w-2 h-2 rounded-full ${isPolling ? 'bg-green-400 animate-pulse' : 'bg-gray-400'}`} />
                 <span className="text-gray-400">{isPolling ? 'Live' : 'Paused'}</span>
               </div>
+            </div>
+
+            {/* LIVE LOCATION TRACKER PANEL */}
+            <div className="mb-6">
+              <ResponderLocationTracker
+                responderId={currentUser?.uid || currentUser?.id}
+                responderEmail={currentUser?.email}
+                onStatusChange={(status, msg) => {
+                  console.log(`[DASHBOARD] Tracker Status: ${status} - ${msg}`);
+                  if (status === 'ACTIVE') toast.success('You are now visible to dispatch');
+                  if (status === 'OFFLINE') toast('Location tracking stopped');
+                }}
+              />
             </div>
           </div>
         </header>
@@ -803,7 +843,7 @@ const AlertCard = ({
     >
       <div className="p-6 bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl hover:bg-white/10 hover:border-white/20 transition-all duration-300 shadow-2xl">
         {/* Collapsed Header - Always Visible */}
-        <div 
+        <div
           className="flex items-center justify-between cursor-pointer"
           onClick={onToggle}
         >
@@ -830,7 +870,7 @@ const AlertCard = ({
                   </div>
                 </span>
               </div>
-              
+
               <div className="flex flex-wrap items-center gap-4 text-sm">
                 <div className="flex items-center gap-1.5 text-gray-300">
                   <MapPin className="w-4 h-4" />
@@ -883,14 +923,16 @@ const AlertCard = ({
                         <Loader className="w-8 h-8 text-orange-400 animate-spin" />
                       </div>
                     )}
-                    {imageError || !alert.detectionImage ? (
+                    {imageError || (!alert.detectionImageBase64 && !alert.detectionImage) ? (
                       <div className="aspect-video flex flex-col items-center justify-center text-gray-400">
                         <XCircle className="w-12 h-12 mb-2" />
-                        <p>{alert.detectionImage ? 'Failed to load image' : 'Image not available'}</p>
+                        <p>{(alert.detectionImage || alert.detectionImageBase64) ? 'Failed to load image' : 'Image not available'}</p>
                       </div>
                     ) : (
                       <img
-                        src={`${getPublicImageUrl ? getPublicImageUrl(alert.detectionImage) : alert.detectionImage}?t=${imageUpdateKey}`}
+                        src={alert.detectionImageBase64
+                          ? `data:image/jpeg;base64,${alert.detectionImageBase64}`
+                          : `${getPublicImageUrl ? getPublicImageUrl(alert.detectionImage) : alert.detectionImage}?t=${imageUpdateKey}`}
                         alt="Fire detection snapshot"
                         className="w-full h-auto"
                         onLoad={() => setImageLoading(false)}
@@ -976,7 +1018,7 @@ const AlertCard = ({
                         <div>
                           <p className="text-xs text-gray-500 uppercase tracking-wide">Coordinates</p>
                           <p className="text-white font-medium">
-                            {alert.houseData.coords?.lat && alert.houseData.coords?.lng 
+                            {alert.houseData.coords?.lat && alert.houseData.coords?.lng
                               ? `${alert.houseData.coords.lat.toFixed(6)}, ${alert.houseData.coords.lng.toFixed(6)}`
                               : 'Not available'}
                           </p>

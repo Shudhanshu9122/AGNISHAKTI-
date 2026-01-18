@@ -542,32 +542,78 @@ export async function getProviderAssignedStations(providerEmail) {
  */
 export async function getProviderDashboardData(providerEmail) {
   const stationIds = await getProviderAssignedStations(providerEmail);
-  if (!stationIds || stationIds.length === 0) return [];
+  /* 
+   * MERGED LOGIC:
+   * 1. Get alerts for houses assigned to provider's stations strategy
+   * 2. Get alerts where provider was explicitly dispatched (dynamic strategy)
+   */
 
-  const chunkSize = 10;
   const houses = [];
-  for (let i = 0; i < stationIds.length; i += chunkSize) {
-    const chunk = stationIds.slice(i, i + chunkSize);
-    const snap = await db.collection("houses").where("nearestFireStationId", "in", chunk).get();
-    snap.forEach((d) => houses.push(d.data()));
+  const alertsByHouse = {};
+
+  // 1. Process Static Alerts (by houseId) - ONLY if stations assigned
+  if (stationIds && stationIds.length > 0) {
+    const chunkSize = 10;
+    for (let i = 0; i < stationIds.length; i += chunkSize) {
+      const chunk = stationIds.slice(i, i + chunkSize);
+      const snap = await db.collection("houses").where("nearestFireStationId", "in", chunk).get();
+      snap.forEach((d) => houses.push(d.data()));
+    }
+
+    const houseIds = houses.map((h) => h.houseId);
+    if (houseIds.length) {
+      for (let i = 0; i < houseIds.length; i += chunkSize) {
+        const chunk = houseIds.slice(i, i + chunkSize);
+        const alertsSnap = await db.collection("alerts")
+          .where("houseId", "in", chunk)
+          .where("status", "in", ["CONFIRMED_BY_GEMINI", "SENDING_NOTIFICATIONS", "NOTIFIED_COOLDOWN", "DISPATCHED"])
+          .get();
+        alertsSnap.forEach((a) => {
+          const ad = a.data();
+          alertsByHouse[ad.houseId] = alertsByHouse[ad.houseId] || [];
+          alertsByHouse[ad.houseId].push(ad);
+        });
+      }
+    }
   }
 
-  const houseIds = houses.map((h) => h.houseId);
-  const alertsByHouse = {};
-  if (houseIds.length) {
-    for (let i = 0; i < houseIds.length; i += chunkSize) {
-      const chunk = houseIds.slice(i, i + chunkSize);
-      // Fetch active alerts that providers should see: confirmed, sending, or in cooldown
-      const alertsSnap = await db.collection("alerts")
-        .where("houseId", "in", chunk)
-        .where("status", "in", ["CONFIRMED_BY_GEMINI", "SENDING_NOTIFICATIONS", "NOTIFIED_COOLDOWN"])
-        .get();
-      alertsSnap.forEach((a) => {
-        const ad = a.data();
-        alertsByHouse[ad.houseId] = alertsByHouse[ad.houseId] || [];
-        alertsByHouse[ad.houseId].push(ad);
-      });
+  // 2. Process Dynamic Dispatched Alerts (Explicitly dispatched to this provider)
+  const safeProviderEmail = normalizeEmail(providerEmail);
+  console.log(`[NEXT_BACKEND] [Dashboard] Checking dispatched alerts for: ${safeProviderEmail}`);
+
+  try {
+    const dispatchedSnap = await db.collection("alerts")
+      .where("dispatchedEmails", "array-contains", safeProviderEmail)
+      .where("status", "==", "DISPATCHED")
+      .get();
+
+    console.log(`[NEXT_BACKEND] [Dashboard] Found ${dispatchedSnap.size} dynamic dispatched alerts.`);
+
+    for (const doc of dispatchedSnap.docs) {
+      const alert = doc.data();
+      console.log(`[NEXT_BACKEND] [Dashboard] Processing dynamic alert: ${alert.alertId} for house ${alert.houseId}`);
+
+      // Add alert to map (deduplicate if already found via static assignment)
+      alertsByHouse[alert.houseId] = alertsByHouse[alert.houseId] || [];
+      const exists = alertsByHouse[alert.houseId].find(a => a.alertId === alert.alertId);
+      if (!exists) {
+        alertsByHouse[alert.houseId].push(alert);
+      }
+
+      // Ensure we have the house logic. If the house wasn't fetched via static assignment, fetch it now.
+      const houseExists = houses.find(h => h.houseId === alert.houseId);
+      if (!houseExists) {
+        console.log(`[NEXT_BACKEND] [Dashboard] Dynamic house ${alert.houseId} not in static list. Fetching...`);
+        const houseDoc = await db.collection("houses").doc(alert.houseId).get();
+        if (houseDoc.exists) {
+          houses.push(houseDoc.data());
+        } else {
+          console.warn(`[NEXT_BACKEND] [Dashboard] House ${alert.houseId} matches alert but document not found.`);
+        }
+      }
     }
+  } catch (err) {
+    console.error("[NEXT_BACKEND] [Dashboard] Error fetching dispatched alerts:", err);
   }
 
   return houses.map((h) => ({ ...h, activeAlerts: alertsByHouse[h.houseId] || [] }));
@@ -589,7 +635,8 @@ export async function checkActiveAlert(cameraId) {
       "PENDING",
       "CONFIRMED_BY_GEMINI",
       "SENDING_NOTIFICATIONS",
-      "NOTIFIED_COOLDOWN"
+      "NOTIFIED_COOLDOWN",
+      "DISPATCHED"
     ]);
 
   const snap = await q.get();
@@ -634,6 +681,10 @@ export async function checkActiveAlert(cameraId) {
   // Check NOTIFIED_COOLDOWN expiry
   if (alertData.status === "NOTIFIED_COOLDOWN" && alertData.cooldownExpiresAt) {
     const cooldownExpiry = alertData.cooldownExpiresAt.toDate ? alertData.cooldownExpiresAt.toDate().getTime() : new Date(alertData.cooldownExpiresAt).getTime();
+    const remainingSeconds = Math.max(0, (cooldownExpiry - now) / 1000);
+    const remainingMinutes = Math.floor(remainingSeconds / 60);
+    const remainingSecsDisplay = Math.floor(remainingSeconds % 60);
+
     if (now > cooldownExpiry) {
       console.log(`[NEXT_BACKEND] [Alert Spam Check] ⏰ Cooldown expired for alert ${alertId}. Allowing new alerts.`);
       // Delete the expired cooldown alert
@@ -644,6 +695,11 @@ export async function checkActiveAlert(cameraId) {
       } catch (deleteErr) {
         console.error(`[NEXT_BACKEND] [Alert Spam Check] ❌ Failed to delete expired alert:`, deleteErr);
       }
+    } else {
+      // Cooldown still active - BLOCK new alerts
+      console.warn(`[NEXT_BACKEND] [Alert Spam Check] 🚫 BLOCKED: Camera ${cameraId} is in 15-min cooldown. Time remaining: ${remainingMinutes}m ${remainingSecsDisplay}s`);
+      console.warn(`[NEXT_BACKEND] [Alert Spam Check] 🚫 Alert ${alertId} will expire at: ${new Date(cooldownExpiry).toLocaleTimeString()}`);
+      return alertData; // Return existing alert to block new one
     }
   }
 
@@ -657,7 +713,7 @@ export async function checkActiveAlert(cameraId) {
  * It creates the alert and starts the Gemini check in the background.
  */
 export async function createPendingAlert(payload) {
-  const { cameraId, className, confidence, bbox, timestamp, imageId } = payload;
+  const { cameraId, className, confidence, bbox, timestamp, imageId, imageBase64 } = payload;
 
   console.log(`[NEXT_BACKEND] [Alert Pipeline] 1. createPendingAlert called for: ${cameraId}`);
 
@@ -666,7 +722,7 @@ export async function createPendingAlert(payload) {
   if (!camDoc.exists) throw new Error("Camera not found");
   const houseId = camDoc.data().houseId;
 
-  // 2. Build REAL snapshot URL
+  // 2. Build REAL snapshot URL as fallback
   let snapshotUrl;
   if (!imageId) {
     throw new Error("imageId is required");
@@ -682,14 +738,22 @@ export async function createPendingAlert(payload) {
     console.log(`[NEXT_BACKEND] [Alert Pipeline] 1a. Built URL from imageId: ${snapshotUrl}`);
   }
 
-  // 3. Create PENDING alert
+  // 3. Log base64 status
+  if (imageBase64) {
+    console.log(`[NEXT_BACKEND] [Alert Pipeline] 1b. Received imageBase64 (${imageBase64.length} chars). Storing in Firebase.`);
+  } else {
+    console.log(`[NEXT_BACKEND] [Alert Pipeline] 1b. No imageBase64 received. Using URL fallback only.`);
+  }
+
+  // 4. Create PENDING alert
   const alertRef = db.collection("alerts").doc();
   const alertPayload = {
     alertId: alertRef.id,
     cameraId,
     houseId,
     status: "PENDING", // User 30s-timer is now active
-    detectionImage: snapshotUrl, // The REAL, working URL
+    detectionImage: snapshotUrl, // URL fallback for backwards compatibility
+    detectionImageBase64: imageBase64 || null, // Base64 image stored directly in Firebase
     className, confidence, bbox,
     createdAt: timestamp ? new Date(timestamp) : new Date(),
     geminiCheck: null,
@@ -698,7 +762,7 @@ export async function createPendingAlert(payload) {
 
   console.log(`[NEXT_BACKEND] [Alert Pipeline] 2. PENDING alert ${alertRef.id} created.`);
 
-  // 4. Start Gemini check (Fire-and-forget, no await)
+  // 5. Start Gemini check (Fire-and-forget, no await)
   // This runs in the background
   console.log(`[NEXT_BACKEND] [Alert Pipeline] 3. Starting Gemini check (fire-and-forget) for alert ${alertRef.id}...`);
   runGeminiVerification(alertRef.id, snapshotUrl).catch(err => {
@@ -756,8 +820,81 @@ async function runGeminiVerification(alertId, snapshotUrl) {
 
       if (geminiRes.isFire) {
         console.log(`[NEXT_BACKEND] [Alert Pipeline] 4a. (Background) ✅ Gemini confirmed REAL fire for ${alertId}.`);
+
+        try {
+          // --- DISPATCH LOGIC START ---
+          const alertData = alertDoc.data();
+          const houseDoc = await db.collection("houses").doc(alertData.houseId).get();
+
+          if (houseDoc.exists) {
+            const houseData = houseDoc.data();
+            if (houseData.coords && houseData.coords.lat && houseData.coords.lng) {
+
+              // 1. Find Nearest Online Responders (Max 5, 50km radius)
+              const responders = await findNearestOnlineResponders(
+                houseData.coords.lat,
+                houseData.coords.lng,
+                50,
+                5
+              );
+
+              if (responders.length > 0) {
+                // 2. Dispatch Alerts
+                const dispatchLog = [];
+                for (const r of responders) {
+                  try {
+                    console.log(`[NEXT_BACKEND] [Dispatch] Sending alert to ${r.email} (${r.distKm.toFixed(1)}km)`);
+                    await sendAlertEmail({
+                      toEmail: r.email,
+                      subject: `🔥 URGENT: FIRE DISPATCH - ${r.distKm.toFixed(1)}km away`,
+                      textBody: `Emergency at ${houseData.address}. Distance: ${r.distKm.toFixed(1)}km. Status: ${geminiRes.reason}`,
+                      htmlBody: `
+                                <h2>🔥 FIRE DISPATCH ORDER</h2>
+                                <p><strong>Location:</strong> ${houseData.address}</p>
+                                <p><strong>Distance:</strong> ${r.distKm.toFixed(1)}km</p>
+                                <p><strong>Severity:</strong> CRITICAL</p>
+                                <p><strong>AI Assessment:</strong> ${geminiRes.reason}</p>
+                                <p><a href="https://www.google.com/maps/dir/?api=1&destination=${houseData.coords.lat},${houseData.coords.lng}">Navigate to Location</a></p>
+                              `,
+                      imageUrl: snapshotUrl
+                    });
+                    dispatchLog.push({
+                      responderId: r.email,
+                      distKm: r.distKm,
+                      dispatchedAt: new Date().toISOString()
+                    });
+                  } catch (sendErr) {
+                    console.error(`[NEXT_BACKEND] [Dispatch] Failed to email ${r.email}:`, sendErr);
+                  }
+                }
+
+                // 3. Update Alert State if anyone was Dispatched
+                if (dispatchLog.length > 0) {
+                  const dispatchedEmails = dispatchLog.map(d => d.responderId);
+                  await alertRef.set({
+                    status: "DISPATCHED",
+                    dispatchedResponders: dispatchLog,
+                    dispatchedEmails: dispatchedEmails // New field for array-contains query
+                  }, { merge: true });
+                  console.log(`[NEXT_BACKEND] [Alert Pipeline] 4b. ✅ SUCCESSFULLY DISPATCHED to ${dispatchLog.length} nearest responders.`);
+                } else {
+                  console.warn(`[NEXT_BACKEND] [Alert Pipeline] 4b. ⚠️ No dispatch emails succeeded.`);
+                }
+              } else {
+                console.warn(`[NEXT_BACKEND] [Alert Pipeline] 4b. ⚠️ No nearby ONLINE responders found.`);
+              }
+            } else {
+              console.warn(`[NEXT_BACKEND] [Alert Pipeline] 4b. ⚠️ House ${alertData.houseId} has no coordinates. Cannot dispatch.`);
+            }
+          }
+          // --- DISPATCH LOGIC END ---
+        } catch (dispatchErr) {
+          console.error(`[NEXT_BACKEND] [Alert Pipeline] 4b. ❌ Critical Dispatch Error:`, dispatchErr);
+        }
+
       } else {
         console.log(`[NEXT_BACKEND] [Alert Pipeline] 4b. (Background) ❌ Gemini rejected FAKE fire for ${alertId}.`);
+        // No need to notify Python - cooldown is handled by Firebase via checkActiveAlert()
       }
     } else {
       console.log(`[NEXT_BACKEND] [Alert Pipeline] 4c. (Background) Gemini finished, but alert ${alertId} status is ${currentStatus} (not PENDING). No update.`);
@@ -869,8 +1006,39 @@ export async function confirmAndSendAlerts(alertId) {
     const ownerDoc = await db.collection("users").doc(ownerEmail).get();
     const owner = ownerDoc.exists ? ownerDoc.data() : { email: ownerEmail };
 
-    // Use the existing findNearestFireStation function
-    const station = await findNearestFireStation(house.coords);
+    // REAL-TIME DISPATCH: Find nearest ACTIVE responder based on live location
+    let station = null;
+    let dispatchMethod = 'none';
+
+    try {
+      const { dispatchAlertToNearestResponder } = require('./alertDispatch');
+      const dispatchResult = await dispatchAlertToNearestResponder(
+        alertId,
+        house.coords,
+        { className, detectionImage, geminiCheck },
+        db
+      );
+
+      if (dispatchResult.success) {
+        station = {
+          email: dispatchResult.dispatchedTo.responderEmail,
+          name: dispatchResult.dispatchedTo.responderEmail.split('@')[0],
+          coords: dispatchResult.dispatchedTo.currentLocation
+        };
+        dispatchMethod = 'real_time_active_responder';
+        console.log(`[NEXT_BACKEND] [Alert Pipeline] 8a. ✅ Dispatched to ACTIVE responder: ${station.email} (${dispatchResult.distance.toFixed(2)} km away)`);
+      }
+    } catch (dispatchError) {
+      console.warn(`[NEXT_BACKEND] [Alert Pipeline] 8a. ⚠️ Real-time dispatch failed: ${dispatchError.message}`);
+      console.log(`[NEXT_BACKEND] [Alert Pipeline] 8a. Falling back to nearest fire station...`);
+    }
+
+    // Fallback: Use the existing findNearestFireStation function if real-time dispatch failed
+    if (!station) {
+      station = await findNearestFireStation(house.coords);
+      dispatchMethod = 'fallback_nearest_station';
+      console.log(`[NEXT_BACKEND] [Alert Pipeline] 8a. Using fallback station: ${station?.name || 'None'}`);
+    }
 
     const gpsLink = house.coords ? `http://maps.google.com/?q=${house.coords.lat},${house.coords.lng}` : null;
     const attachImage = !geminiCheck.sensitive;
@@ -885,25 +1053,25 @@ export async function confirmAndSendAlerts(alertId) {
       htmlBody: htmlOwner,
       imageUrl: attachImage ? snapshotUrl : null,
     });
-    console.log(`[NEXT_BACKEND] [Alert Pipeline] 8a. Sent email to Owner: ${owner.email}`);
+    console.log(`[NEXT_BACKEND] [Alert Pipeline] 8b. Sent email to Owner: ${owner.email}`);
 
-    // Send Fire Station Email
+    // Send Fire Station Email (to active responder or fallback station)
     if (station && station.email) {
       const subjectStation = `ALERT: Fire at ${house.address}`;
-      const htmlStation = `<p>Fire alert at ${house.address}</p><p>House owner: ${owner.email}</p><p>Gemini AI has confirmed this is a real fire.</p><p><a href="${gpsLink}" target="_blank">Navigate</a></p>`;
+      const htmlStation = `<p>Fire alert at ${house.address}</p><p>House owner: ${owner.email}</p><p>Gemini AI has confirmed this is a real fire.</p><p>Dispatch method: ${dispatchMethod}</p><p><a href="${gpsLink}" target="_blank">Navigate</a></p>`;
       await sendAlertEmail({
         toEmail: station.email,
         subject: subjectStation,
         htmlBody: htmlStation,
         imageUrl: attachImage ? snapshotUrl : null,
       });
-      console.log(`[NEXT_BACKEND] [Alert Pipeline] 8b. Sent email to Station: ${station.email}`);
+      console.log(`[NEXT_BACKEND] [Alert Pipeline] 8c. Sent email to ${dispatchMethod === 'real_time_active_responder' ? 'Active Responder' : 'Station'}: ${station.email}`);
     }
 
-    // 9. Set to "Cooldown"
+    // 9. Set to "Cooldown" - 15 minutes to prevent repeated alerts
     await alertRef.set({
       status: "NOTIFIED_COOLDOWN",
-      cooldownExpiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 10 * 60 * 1000), // 10 mins
+      cooldownExpiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 10 * 60 * 1000), // 10 mins (was 15)
       sentEmails: { ownerSent: true, stationSent: !!(station && station.email) },
     }, { merge: true });
 
@@ -943,7 +1111,7 @@ export async function updateActiveAlertImages() {
     console.log(`[NEXT_BACKEND] [Image Update] Starting periodic image update for active alerts...`);
 
     // Get all active alerts
-    const activeStatuses = ["CONFIRMED_BY_GEMINI", "SENDING_NOTIFICATIONS", "NOTIFIED_COOLDOWN"];
+    const activeStatuses = ["CONFIRMED_BY_GEMINI", "SENDING_NOTIFICATIONS", "NOTIFIED_COOLDOWN", "DISPATCHED"];
     const activeAlertsSnapshot = await db.collection("alerts")
       .where("status", "in", activeStatuses)
       .get();
@@ -1149,13 +1317,33 @@ Workflow:
 
 Your task:
 - Carefully analyze the image.
-- Identify whether real fire or flames are present.
-- Distinguish between actual fire and false triggers such as light reflections, sunlight, fog, or camera noise.
+- Identify whether there is a DANGEROUS or UNCONTROLLED fire that requires emergency response.
+- Distinguish between actual fire emergencies and safe/controlled fire sources.
+
+IMPORTANT - IGNORE these common household items (they are NOT emergencies):
+- Lighters being used normally (even if lit)
+- Candles burning normally
+- Cooking stoves, gas burners, or stovetop flames
+- Matches being struck
+- Fireplaces with contained fires
+- BBQ grills or outdoor cooking
+- Birthday cake candles
+- Incense or diya lamps
+
+TRIGGER ALERT for these REAL fire emergencies:
+- Paper, books, or documents on fire
+- Furniture or curtains burning
+- Electrical fires or sparks with flames
+- Uncontrolled spreading flames
+- Smoke with visible fire damage
+- Any fire that appears to be spreading or out of control
+- Fires in unexpected locations (not a stove/fireplace/candle holder)
 
 Based on your analysis:
-- Confirm or reject the fire detection.
-- Estimate confidence level.
-- Recommend whether an emergency alert should be triggered.
+- ONLY confirm fire if it's an actual emergency requiring response
+- Reject detection for normal household fire sources (lighters, candles, stoves)
+- Estimate confidence level
+- Recommend whether an emergency alert should be triggered
 
 Respond ONLY in valid JSON format:
 
@@ -1420,4 +1608,166 @@ export async function getAlertsByOwnerEmail(ownerEmail) {
   }
 
   return alerts;
+}
+
+// =================================================================
+// --- RESPONDER TRACKING & DISPATCH (EXACT IMPLEMENTATION) ---
+// =================================================================
+
+/**
+ * updateResponderHeartbeat
+ * - Updates responder's live location and lastSeen timestamp
+ * - Only runs if status is ONLINE (or explicitly passed)
+ */
+export async function updateResponderHeartbeat({ responderId, responderEmail, location, status }) {
+  if (!responderId && !responderEmail) throw new Error("Responder identifier missing");
+
+  // Use email as doc ID if available (normalized), else responderId
+  let ref;
+  if (responderEmail) {
+    ref = db.collection("users").doc(normalizeEmail(responderEmail));
+  } else {
+    ref = db.collection("users").doc(responderId);
+  }
+
+  const updatePayload = {
+    lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  if (location) {
+    updatePayload.currentLocation = {
+      lat: location.latitude,
+      lng: location.longitude,
+      accuracy: location.accuracy || 0,
+      timestamp: location.timestamp || new Date().toISOString()
+    };
+  }
+
+  if (status) {
+    updatePayload.status = status;
+  }
+
+  // Use set with merge=true to handle case where doc might be missing fields
+  await ref.set(updatePayload, { merge: true });
+  console.log(`[BACKEND] [Heartbeat] Updated ${responderEmail || responderId} - Status: ${status || 'KEEP'}, Loc: ${location ? 'YES' : 'NO'}`);
+  return { success: true };
+}
+
+/**
+ * findNearestOnlineResponders
+ * - Finds ONLINE responders within service radius
+ * - Sorts by distance
+ * - Returns top N
+ */
+export async function findNearestOnlineResponders(fireLat, fireLng, radiusKm = 50, limit = 5) {
+  console.log(`[BACKEND] [Dispatch] Finding nearest responders to [${fireLat}, ${fireLng}] radius=${radiusKm}km...`);
+
+  // 1. Query ONLINE responders
+  const respondersSnap = await db.collection("users")
+    .where("role", "==", "provider")
+    .where("status", "==", "ONLINE")
+    .get();
+
+  if (respondersSnap.empty) {
+    console.log(`[BACKEND] [Dispatch] No ONLINE responders found.`);
+    return [];
+  }
+
+  const candidates = [];
+  const now = Date.now();
+  const MAX_SILENCE_MS = 5 * 60 * 1000; // 5 minutes
+
+  respondersSnap.forEach(doc => {
+    const data = doc.data();
+
+    // Check liveness (lastSeen < 5 mins)
+    if (!data.lastSeen) return;
+    const lastSeenTime = data.lastSeen.toDate ? data.lastSeen.toDate().getTime() : new Date(data.lastSeen).getTime();
+    if (now - lastSeenTime > MAX_SILENCE_MS) {
+      // Stale - skip
+      return;
+    }
+
+    // Check location existence
+    if (!data.currentLocation || !data.currentLocation.lat || !data.currentLocation.lng) return;
+
+    // Calculate distance
+    const dist = haversineKm(fireLat, fireLng, data.currentLocation.lat, data.currentLocation.lng);
+
+    if (dist <= radiusKm) {
+      candidates.push({
+        ...data,
+        email: doc.id, // Normalized email is the ID
+        distKm: dist
+      });
+    }
+  });
+
+  // Sort by distance ASC
+  candidates.sort((a, b) => a.distKm - b.distKm);
+
+  // Take top N
+  const selected = candidates.slice(0, limit);
+
+  console.log(`[BACKEND] [Dispatch] Found ${candidates.length} candidates. Selected top ${selected.length}.`);
+  selected.forEach((c, i) => console.log(`   #${i + 1}: ${c.name} (${c.distKm.toFixed(2)}km)`));
+
+  return selected;
+}
+
+/**
+ * resetCooldownForUser
+ * - Clears all active cooldown/blocked alerts for a user's cameras.
+ * - Called on user login to ensure clean slate for demos.
+ */
+export async function resetCooldownForUser(ownerEmail) {
+  console.log(`[BACKEND] [Demo Reset] Clearing cooldown for user: ${ownerEmail}`);
+
+  const safeEmail = normalizeEmail(ownerEmail);
+
+  // 1. Get all houses for this owner
+  const housesSnap = await db.collection("houses").where("ownerEmail", "==", safeEmail).get();
+  if (housesSnap.empty) {
+    console.log(`[BACKEND] [Demo Reset] No houses found for ${safeEmail}`);
+    return { success: true, deletedCount: 0 };
+  }
+
+  const houseIds = housesSnap.docs.map(d => d.id);
+  console.log(`[BACKEND] [Demo Reset] Found ${houseIds.length} houses`);
+
+  // 2. Get all cameras for these houses
+  let cameraIds = [];
+  for (let i = 0; i < houseIds.length; i += 10) {
+    const chunk = houseIds.slice(i, i + 10);
+    const camerasSnap = await db.collection("cameras").where("houseId", "in", chunk).get();
+    camerasSnap.forEach(doc => cameraIds.push(doc.id));
+  }
+
+  if (cameraIds.length === 0) {
+    console.log(`[BACKEND] [Demo Reset] No cameras found for user`);
+    return { success: true, deletedCount: 0 };
+  }
+
+  console.log(`[BACKEND] [Demo Reset] Found ${cameraIds.length} cameras`);
+
+  // 3. Delete ALL active alerts for these cameras (regardless of status)
+  let deletedCount = 0;
+  for (let i = 0; i < cameraIds.length; i += 10) {
+    const chunk = cameraIds.slice(i, i + 10);
+    const alertsSnap = await db.collection("alerts").where("cameraId", "in", chunk).get();
+
+    for (const doc of alertsSnap.docs) {
+      try {
+        await doc.ref.delete();
+        deletedCount++;
+        console.log(`[BACKEND] [Demo Reset] Deleted alert ${doc.id}`);
+      } catch (err) {
+        console.error(`[BACKEND] [Demo Reset] Failed to delete alert ${doc.id}:`, err);
+      }
+    }
+  }
+
+  console.log(`[BACKEND] [Demo Reset] ✅ Cleared ${deletedCount} alerts for ${safeEmail}`);
+  return { success: true, deletedCount };
 }

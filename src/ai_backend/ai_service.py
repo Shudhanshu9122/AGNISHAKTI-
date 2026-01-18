@@ -5,14 +5,14 @@ import numpy as np
 import shutil
 import uuid
 import requests
-import base64
 import time
-from typing import Dict
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import base64
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from ultralytics import YOLO
 from dotenv import load_dotenv
+# Note: gemini_fire_verifier is no longer used here - Gemini verification is handled by Next.js
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,9 +28,12 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 SNAPSHOT_DIR = "saved_snapshots"
 os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
-# Snapshot throttle configuration (per camera)
-SNAPSHOT_THROTTLE_SECONDS = 5
-_last_snapshot_epoch_by_camera: Dict[str, float] = {}
+# Alert throttling configuration
+ALERT_THROTTLE_SECONDS = 5
+_last_alert_time = {}
+
+# Note: All cooldown logic is now handled by Next.js via Firebase
+# Python just does YOLO detection and triggers alerts via Next.js API
 
 # Model setup
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -58,12 +61,13 @@ app.add_middleware(
 # Core Inference Logic
 # ------------------------------
 def infer_and_draw(frame, camera_id=None):
-    """Runs YOLO inference and draws bounding boxes on the frame."""
+    """Runs YOLO inference, draws bounding boxes, and triggers alerts for fire/smoke detections."""
     results = model(frame, imgsz=640, verbose=False)
     
-    # Collect detections for alerting
-    detections = [] 
-
+    # Track best detection for alerting
+    best_detection = None
+    best_conf = 0.0
+    
     for r in results:
         for box in r.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -71,114 +75,82 @@ def infer_and_draw(frame, camera_id=None):
             cls = int(box.cls[0])
             name = class_names[cls]
             
-            # Draw rectangle and label
+            # Draw rectangle and label for all detections
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
             label = f"{name} {conf:.2f}"
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
-            # Check for fire/smoke detection and trigger alert
+            
+            # Track highest confidence fire/smoke detection
             if name in ["fire", "smoke"] and conf > 0.75:
-                detections.append({
-                    "class": name, 
-                    "confidence": conf,
-                    "bbox": [x1, y1, x2, y2]
-                })
+                if conf > best_conf:
+                    best_conf = conf
+                    best_detection = {
+                        "class": name,
+                        "confidence": conf,
+                        "bbox": [x1, y1, x2, y2]
+                    }
+    
+    # If fire detected, save snapshot and trigger alert via Next.js
+    if best_detection:
+        safe_camera_id = camera_id or os.getenv("DEFAULT_CAMERA_ID", "demo_camera")
+        
+        # Check throttle
+        current_time = time.time()
+        last_time = _last_alert_time.get(safe_camera_id, 0)
+        
+        if current_time - last_time < ALERT_THROTTLE_SECONDS:
+            # Too soon, skip alert
+            return frame
+            
+        try:
+            # Update last alert time immediately to prevent race conditions
+            _last_alert_time[safe_camera_id] = current_time
+
+            # Encode frame as base64 for Firebase storage
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            image_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            # Save snapshot locally as backup
+            image_id = f"{uuid.uuid4()}.jpg"
+            snapshot_path = os.path.join(SNAPSHOT_DIR, image_id)
+            success = cv2.imwrite(snapshot_path, frame)
+            
+            if success:
+                print(f"[PYTHON] 🔥 Fire detected: {best_detection['class']} ({best_detection['confidence']:.2f})")
+                print(f"[PYTHON] 📸 Snapshot saved: {image_id} (base64 size: {len(image_base64)} chars)")
                 
-                # Send alert to backend with camera ID
-                if _should_send_snapshot(camera_id):
-                    send_alert_to_backend(frame, name, conf, [x1, y1, x2, y2], camera_id)
+                # Trigger alert via Next.js client-trigger endpoint
+                # This will handle Gemini verification and cooldown logic
+                nextjs_url = os.getenv("NEXTJS_API_URL", "http://localhost:3000")
+                alert_payload = {
+                    "cameraId": safe_camera_id,
+                    "imageId": image_id,
+                    "imageBase64": image_base64,
+                    "className": best_detection["class"],
+                    "confidence": best_detection["confidence"],
+                    "bbox": best_detection["bbox"],
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+                }
+                
+                response = requests.post(
+                    f"{nextjs_url}/api/alerts/client-trigger",
+                    json=alert_payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10  # Increased timeout for larger payload
+                )
+                
+                if response.status_code == 200:
+                    print(f"[PYTHON] ✅ Alert triggered successfully for camera {safe_camera_id}")
+                else:
+                    print(f"[PYTHON] ⚠️ Alert trigger failed: {response.status_code} - {response.text}")
+                    
+        except Exception as e:
+            print(f"[PYTHON] ❌ Error triggering alert: {e}")
+
 
     return frame
 
-# ------------------------------
-# Alert Functions
-# ------------------------------
-def send_alert_to_backend(frame, className, confidence, bbox, camera_id=None):
-    """Send alert to Node.js backend with imageId instead of base64 data."""
-    try:
-        # Generate unique image ID
-        image_id = f"{uuid.uuid4()}.jpg"
-        
-        # Define the full save path
-        snapshot_path = os.path.join(SNAPSHOT_DIR, image_id)
-        
-        # Save the clean frame to local storage
-        success = cv2.imwrite(snapshot_path, frame)
-        if not success:
-            print(f"[ERROR] Failed to save snapshot: {snapshot_path}")
-            return
-        
-        # Use provided camera_id or fallback to environment variable
-        camera_id = camera_id or os.getenv("DEFAULT_CAMERA_ID", "default_camera_id")
-        
-        # Prepare the payload with imageId instead of base64
-        payload = {
-            "serviceKey": os.getenv("SERVICE_KEY", "my_secret_service_key"),
-            "cameraId": camera_id,
-            "className": className,
-            "confidence": confidence,
-            "bbox": bbox,
-            "imageId": image_id,  # New field instead of snapshotBase64
-            "timestamp": None  # Will be set by backend
-        }
-        
-        # Send to Node.js backend
-        backend_url = os.getenv("NEXTJS_API_URL", "http://localhost:3000/api/alerts/trigger")
-        headers = {
-            "x-service-key": os.getenv("SERVICE_KEY", "my_secret_service_key"),
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.post(backend_url, json=payload, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            print(f"[ALERT] Successfully sent alert for {className} detection")
-        else:
-            print(f"[ALERT] Failed to send alert: {response.status_code} - {response.text}")
-            
-    except Exception as e:
-        print(f"[ALERT] Error sending alert: {e}")
 
-def _should_send_snapshot(camera_id: str | None) -> bool:
-    """Return True if enough time has elapsed since the last snapshot for this camera.
-    Updates the last snapshot timestamp when returning True.
-    """
-    safe_camera_id = camera_id or os.getenv("DEFAULT_CAMERA_ID", "default_camera_id")
-    now = time.time()
-    last = _last_snapshot_epoch_by_camera.get(safe_camera_id, 0.0)
-    if now - last >= SNAPSHOT_THROTTLE_SECONDS:
-        _last_snapshot_epoch_by_camera[safe_camera_id] = now
-        return True
-    return False
-
-# # ------------------------------
-# # Core Inference Logic
-# # ------------------------------
-# def infer_and_draw(frame):
-#     """Runs YOLO inference and draws bounding boxes on the frame for high-confidence detections."""
-    
-#     # Define a confidence threshold to filter out weak detections
-#     CONFIDENCE_THRESHOLD = 0.6  # You can adjust this value as needed
-    
-#     results = model(frame, imgsz=640, verbose=False)
-    
-#     for r in results:
-#         for box in r.boxes:
-#             conf = float(box.conf[0])
-#             cls = int(box.cls[0])
-#             name = class_names[cls]
-            
-#             # Only draw if the confidence is above the threshold AND it's a "fire" or "smoke" detection
-#             if conf > CONFIDENCE_THRESHOLD and name in ["fire", "smoke"]:
-#                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                
-#                 # Draw the bounding box
-#                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green box for detected fire/smoke
-                
-#                 # Draw the label with confidence score
-#                 label = f"{name} {conf:.2f}"
-#                 cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-#     return frame
 
 # ------------------------------
 # Video Processing Generator
@@ -320,6 +292,9 @@ def webcam_feed_for_camera(camera_id: str):
     """Streams processed video from the primary webcam (index 0) with a specific camera ID."""
     return StreamingResponse(process_video_stream(0, camera_id=camera_id), media_type="multipart/x-mixed-replace; boundary=frame")
 
+# Note: reset-cooldown and switch-to-false-alarm endpoints removed
+# Cooldown is now fully managed by Next.js via Firebase checkActiveAlert()
+
 @app.get("/snapshots/{image_id}")
 def get_snapshot(image_id: str):
     """Serves saved detection images by their unique ID."""
@@ -413,11 +388,14 @@ async def get_latest_snapshot(camera_id: str):
         )
 
 @app.post("/analyze_and_save_frame")
-async def analyze_and_save_frame(file: UploadFile = File(...)):
+async def analyze_and_save_frame(
+    file: UploadFile = File(...),
+    camera_id: str = Form(default=None)
+):
     """
-    Analyzes a single frame. If fire/smoke is detected, it saves the image
-    to the 'saved_snapshots' dir and returns the new imageId along
-    with the detection data.
+    SIMPLIFIED: YOLO detection only - no Gemini verification here.
+    If fire/smoke is detected above threshold, saves the image and returns detection.
+    Gemini verification is handled by Next.js backend.
     """
     try:
         contents = await file.read()
@@ -428,7 +406,7 @@ async def analyze_and_save_frame(file: UploadFile = File(...)):
             print("[PYTHON] ❌ Error: Could not decode image.")
             return JSONResponse(content={"error": "Could not decode image."}, status_code=400)
 
-        # --- START OF VERBOSE LOGGING ---
+        # Run YOLO
         print("\n[PYTHON] ---------------- NEW FRAME ----------------")
         print("[PYTHON] ✅ Frame received. Running YOLO model...")
         
@@ -436,7 +414,7 @@ async def analyze_and_save_frame(file: UploadFile = File(...)):
         
         best_detection = None
         
-        # Log *all* detections, even low-confidence ones
+        # Log all detections
         found_anything = False
         for r in results:
             for box in r.boxes:
@@ -444,13 +422,12 @@ async def analyze_and_save_frame(file: UploadFile = File(...)):
                 cls_id = int(box.cls[0].item())
                 class_name = model.names[cls_id]
                 
-                # Log everything the model sees
                 print(f"[PYTHON]   - Found: {class_name} (Confidence: {conf:.2f})")
                 found_anything = True
                 
-                # Now, check if it's our target (0.75 threshold)
+                # Check if it's fire/smoke above threshold
                 if class_name in ['fire', 'smoke'] and conf > 0.75:
-                    if best_detection is None: 
+                    if best_detection is None or conf > best_detection["confidence"]:
                         best_detection = {
                             "class": class_name,
                             "confidence": conf,
@@ -459,28 +436,32 @@ async def analyze_and_save_frame(file: UploadFile = File(...)):
         
         if not found_anything:
             print("[PYTHON]   - Model found no objects in this frame.")
-        # --- END OF VERBOSE LOGGING ---
         
         if best_detection:
-            # Fire IS detected. Save the image.
+            # Fire detected by YOLO - save image and encode as base64
             image_id = f"{uuid.uuid4()}.jpg"
             snapshot_path = os.path.join(SNAPSHOT_DIR, image_id)
             
-            success = cv2.imwrite(snapshot_path, frame)
+            # Encode frame as base64 for Firebase storage
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            image_base64 = base64.b64encode(buffer).decode('utf-8')
             
-            if success:
-                print(f"[PYTHON] 🔥🔥🔥 SUCCESS! Fire detected! Conf: {best_detection['confidence']:.2f}. Saved as: {image_id}")
-                return JSONResponse(content={
-                    "detection": best_detection,
-                    "imageId": image_id
-                })
-            else:
-                print(f"[PYTHON] ❌ Error: Fire detected, but FAILED to save snapshot.")
+            success = cv2.imwrite(snapshot_path, frame)
+            if not success:
+                print(f"[PYTHON] ❌ Error: Failed to save snapshot.")
                 return JSONResponse(content={"error": "Failed to save snapshot."}, status_code=500)
-        
+            
+            print(f"[PYTHON] 🔥 YOLO detected {best_detection['class']} ({best_detection['confidence']:.2f}). Image saved: {image_id} (base64 size: {len(image_base64)} chars)")
+            print("[PYTHON] ➡️ Sending to Next.js for Gemini verification...")
+            
+            return JSONResponse(content={
+                "detection": best_detection,
+                "imageId": image_id,
+                "imageBase64": image_base64
+            })
         else:
-            # No fire detected that passes the 0.75 threshold.
-            print("[PYTHON] ✅ No fire detected *above 0.75 threshold*. Returning null.")
+            # No fire detected
+            print("[PYTHON] ✅ No fire detected above 0.75 threshold.")
             return JSONResponse(content={"detection": None, "imageId": None})
 
     except Exception as e:
